@@ -1,0 +1,130 @@
+---
+title: "Homework"
+output: pdf_document
+---
+
+# Problem 1
+
+I work at General Motors (GM) analyzing 12V battery data to identify potential vehicle issues. Since all vehicle electronics draw power from the 12V battery while the vehicle is off, the battery often acts as a "canary in the coal mine" for software problems in off-power mode – such as control units not shutting down properly, or features activating unexpectedly.
+
+To detect these problems, we analyze signals that vehicles transmit to GM’s servers (telemetry) along with diagnostic trouble codes (DTCs). GM also collects approximately real-world usage data from employees who drive company vehicles in their daily lives. We then classify whether a vehicle’s battery is draining excessively and determine if the issue is a previously known problem or a new one requiring deeper engineering investigation.
+
+Some predictors that we use in our classification work are:
+
+1.  Telemetry signals sent by the vehicle
+2.  Software versions or modules running on the vehicle
+3.  Whether the driver is a known “super user” who may have non-standard equipment installed
+4.  Presence of diagnostic trouble codes (DTCs).
+
+\pagebreak
+
+# Problem 2
+
+```{r}
+suppressPackageStartupMessages(library(kernlab))
+suppressPackageStartupMessages(library(pracma))
+suppressPackageStartupMessages(library(kknn))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(sfsmisc))
+
+d <- read.csv("./data 2.2/credit_card_data-headers.txt", sep = "\t" )
+
+x <- data.matrix(within(d, rm(R1)))
+# x <- data.matrix(d[, c("A9", "A15")])
+y <- as.vector(unlist(d["R1"]))
+```
+
+\pagebreak
+
+## Part A
+
+Note: This is my first time programming in R, so I relied heavily on Google and Stack Overflow; however, all code is original. The basic setup is encapsulated below, and then called where appropriate in the analysis
+
+### Code
+
+```{r}
+model_generator <- function(c) {
+  ksvm(
+    x,
+    y,
+    C=c,
+    type="C-svc",
+    kernel="vanilladot",
+    scaled=TRUE,
+    kpar = list()
+  )
+}
+
+svm_plot_range <- function(c_min, c_max, filename=NULL, n = 20) {
+  # Generate plot for range of C's
+  c_range = logspace(log10(c_min), log10(c_max), n = n)
+  error_range <- sapply(c_range, function(c) { model_generator(c)@error } )
+  
+  # create a chart
+  if (is.null(filename)) {
+    plot(c_range, error_range, log="x", xlab="C", ylab="loss")
+  } else {
+    png(filename=filename)
+    plot(c_range, error_range, log="x", xlab="C", ylab="loss")
+    dev.off()
+  }
+}
+```
+
+### Methodology
+
+Since I did not know an appropriate value for, I decided to do an initial domain search plotting loss against a range of values. To reduce boilerplate through the rest of the code, I defined a `model_generator` function defining the parameters laid out in the assignment. Then using `sapply` as a for loop generated the loss for a range of values using the `svm_plot_range` (again to reduce boilerplate).
+
+The `caret` was used to create a confusion matrix for the chosen model to reveal additional information about the accuracy of the classifier.
+
+\pagebreak
+
+### Results
+
+The domain search shows a wide range C that the analysis is insensitive to the choice in parameter with a constant error floor from $C = [2\times 10^{-3}, 5 \times 10^{2} ]$.
+
+```{r}
+r <- svm_plot_range(c_min = 10^-4, c_max = 10^4)
+r <- svm_plot_range(c_min = 2*10^-3, c_max = 5*10^2)
+```
+
+Since there is negligible difference over this range, I will choose to use $C=10$ for the remaining calculations.
+
+```{r}
+# arbitrarily choosing C=10
+model <- model_generator(c=10)
+```
+
+Using the code provided in the assignment I exported the coefficients to show the equation for this classifier:
+
+```{r}
+# copy from the homework assignment
+a <- colSums(model@xmatrix[[1]] * model@coef[[1]])
+a0 <- -model@b
+
+# out <- paste("0 = ", toLatex(a0, scientific = TRUE, times = '\\times'))
+ 
+out <- sprintf(
+     "0 = %s + %s",
+     toLatex(a0, scientific = TRUE, times = '\\times'),
+     paste(
+       sprintf(
+         "%s \\cdot %s",
+         toLatex(a, scientific = TRUE, times = '\\times'),
+         names(a)
+       ),
+       collapse = " + "
+      )
+)
+```
+\begin{center}
+$`r out`$
+\end{center}
+
+```{r}
+pred <- predict(model,x)
+print(pred)
+
+# create a confusion matrix
+print( confusionMatrix( data=as.factor(pred), reference=as.factor(y) ) )
+```

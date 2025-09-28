@@ -1,0 +1,296 @@
+---
+title: "Homework 5"
+output: pdf_document
+date: "2025-09-25"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# [Question 8.1]{.underline}
+
+> Describe a situation or problem from your job, everyday life, current
+> events, etc., for which a linear regression model would be
+> appropriate. List some (up to 5) predictors that you might use.
+
+An example of regression that I used in my Ph.D. research was using
+approximations and transformations to convert highly non-linear
+equations into simple linear data, then fitting this to experimental
+data to extract coefficients. One method that I proposed, was in the
+calculation of the work function of a material from thermionic emission
+data. The standard practice for this method is to perform two linear
+fits
+
+1.  From the current at multiple voltage measurements extract the zero
+    voltage current, then
+2.  From multiple zero voltage currents at different temperatures, the
+    work function and "Richardson's coefficient" (a measure of emission
+    efficiency) can be extracted.
+
+However, this method requires maintaining a constant temperature and my
+collaborators and I were having difficulty doing this (thermionic
+emission is very non-linear and small swings in temperature can lead to
+large changes in measured current). So instead I proposed to decompose
+the governing equation as fitting a plane and extract the coefficients
+from these parameters instead. The predictors were the inverse of the
+temperature ($1/T$) and the square root of the voltage over the
+temperature ($\sqrt{V}/T$) and the response was $\ln(i/T^2)$. Therefore
+we were able to fit
+
+$\ln \big(\frac{i}{T^2} \big) = \ln(AS) - \frac{\phi}{k} (\frac{1}{T}) + \sqrt{\frac{q^3}{4 \pi \varepsilon_0 d}} (\frac{\sqrt{V}}{T})$
+
+\newpage
+
+# [Question 8.2]{.underline}
+
+> Using crime_stats data from
+> <http://www.statsci.org/data/general/uscrime.txt> (file uscrime.txt,
+> description at <http://www.statsci.org/data/general/uscrime.html> ),
+> use regression (a useful R function is lm or glm) to predict the
+> observed crime_stats rate in a city with the following data:
+>
+> |               |               |                 |
+> |:-------------:|:-------------:|:---------------:|
+> |  `M = 14.0`   |   `So = 0`    |   `Ed = 10.0`   |
+> | `Po1 = 12.0`  | `Po2 = 15.5`  |  `LF = 0.640`   |
+> | `M.F = 94.0`  |  `Pop = 150`  |   `NW = 1.1`    |
+> | `U1 = 0.120`  |  `U2 = 3.6`   | `Wealth = 3200` |
+> | `Ineq = 20.1` | `Prob = 0.04` |  `Time = 39.0`  |
+>
+> Show your model (factors used and their coefficients), the software
+> output, and the quality of fit.
+>
+> Note that because there are only 47 data points and 15 predictors,
+> you’ll probably notice some overfitting. We’ll see ways of dealing
+> with this sort of problem later in the course.
+
+First, we load the necessary libraries:
+
+```{r, message=FALSE}
+library(printr)     # pretty print for Rmd
+library(lubridate)  # dates
+library(ggplot2)    # plots
+library(dplyr)      # dataframes
+library(tidyr)
+library(tidyverse)
+library(recipes)
+library(caret)
+library(MASS)      # step models
+
+# set seed for reproducibility
+set.seed(42)
+```
+
+Now let's load the data:
+
+```{r}
+df <- read.csv("./data 8.2/uscrime.txt", sep = "\t")
+```
+
+Note: As was stated in the question, our data set is extremely limited,
+therefore I will do 10-fold cross validation on the final model, but am
+not going to be creating a final test set.
+
+Before doing any analysis, I want to get a baseline of whether these
+analyses are improving model quality. So we're going to look at the
+performance of the raw data. I am going to use a log transform on the
+predictor because crime_stats rates are limited to the non-negative
+domain which is not guaranteed by an untransformed linear model.
+
+```{r}
+model <- lm(formula = Crime ~ ., data = df)
+summary(model)$adj.r.squared
+```
+
+\newpage
+
+## Feature engineering
+
+Our data has 15 predictors and one response. Before starting I looked at
+the data and determined what each variable is and what the distribution
+looked like using `pairs`. From this there were some derived features
+that seemed obvious to me:
+
+```{r}
+crime_stats <- df
+```
+
+-   Labor force participation and percent of non-white population
+    appears to have a quadratic-like relationship
+
+```{r}
+crime_stats$LF2 = crime_stats$LF^2
+crime_stats$NW2 = crime_stats$NW^2
+```
+
+-   Crime probability appears to have an inverse relationship
+
+```{r}
+crime_stats$InvProb = 1 / crime_stats$Prob
+```
+
+So, let's see what the model quality is with these added terms
+
+```{r}
+model <- lm(formula = log(Crime) ~ ., data = crime_stats)
+summary(model)$adj.r.squared
+```
+
+The added features made a noticeable improvement; however, because the
+coefficients are not normalized we cannot get an understanding of their
+significance based on coefficient size. So, let's normalize all the
+non-boolean values (`So`). Since we are going to want to do inference
+later on we need to retain our scaling parameters, it looks like the
+`recipes` package allows pipelines similar to sklearn and so that is
+what we'll use to standardize this.
+
+```{r}
+rec <- recipe(Crime ~ ., data = crime_stats)
+
+step <- rec |>
+  step_normalize(all_numeric_predictors(), -all_of("So"))
+
+scaler <- prep(step, training = crime_stats)
+
+crime_scaled <- bake(scaler, new_data = crime_stats)
+```
+
+\newpage
+
+So, let's see what the model coefficients using the scaled data
+
+```{r}
+full_model <- lm(formula = log(Crime) ~ ., data = crime_scaled)
+summary(full_model)
+```
+
+First notice that the $R^2$ is the exact same as the unscaled model,
+indicating that scaling did not influence our fitting significantly.
+Further we can see that some coefficients such as educational
+attainment, unemployment, percentage of non-whites in the population,
+and absolute number of police in 1959 and 1960 were good predictors
+along with the derived characteristics of the ratio of adult to youth
+unemployment, and the squares of non-white percentage and labor force
+participation.
+
+\newpage
+
+## Step AIC
+
+It was recommended on [Piaza by Emily Chia-Huei
+Ko](https://piazza.com/class/md4ran6oq14de/post/mfsjqi2reqa6k4) by to
+look at "[An Introduction to Statistical Learning with Applications in
+R](https://hastie.su.domains/ElemStatLearn/)". The part that stood out
+to me was step selection of variables, I had used the technique in in a
+previous job but had completely forgotten about it. So let's use
+`stepAIC`[^1] to remove some of the unimportant factors and make our
+model more parsimonious.
+
+[^1]: <https://www.rdocumentation.org/packages/MASS/versions/7.3-65/topics/stepAIC>
+
+```{r}
+constant_model <- lm(log(Crime) ~ 1, data = crime_scaled)
+
+# pages of output
+invisible(
+  capture.output(
+    step_model <- stepAIC(
+      constant_model,
+      scope = list(lower = constant_model, upper = full_model),
+      direction = "both"
+    )
+  )
+)
+
+summary(step_model)
+```
+
+This has significantly cut down our number of parameters reducing our
+risk of overfitting with minimal impact to our adjusted R-squared.
+
+\newpage
+
+## Cross-validation
+
+As stated above we are using the entire dataset for training; however, I
+want to get an idea of the validity of the fit metrics we've been
+outputting. Let's do a cross validation of the data to see if there's
+any problems hidden in our final model
+
+```{r}
+train_control <- trainControl(method = "cv", number = 10)
+cross_val_stats <- train(
+  formula(step_model),
+  data = crime_scaled,
+  method = "lm",
+  trControl = train_control
+)
+
+cross_val_stats
+```
+
+We do see a significant amount of degradation in the cross validation
+indicating that we are overfitting the data, unfortunately there is not
+much that we can do about that with our current toolset and the
+overfitting would have been worse if we had not trimmed coefficients
+from the model.
+
+\newpage
+
+## Datapoint prediction
+
+Let's see what the predicted crime_stats for the specified parameters is
+
+```{r}
+crime_test <- data.frame(
+  M      = 14.0, So     = 0, Ed     = 10.0, Po1    = 12.0,
+  Po2    = 15.5, LF     = 0.640, M.F    = 94.0, Pop    = 150,
+  NW     = 1.1, U1     = 0.120, U2     = 3.6, Wealth = 3200,
+  Ineq   = 20.1, Prob   = 0.04, Time   = 39.0
+) %>% mutate(
+  InvProb = 1 / Prob,
+  LF2 = LF^2,
+  NW2 = NW^2
+)
+
+crime_test_scaled <- bake(scaler, new_data = crime_test)
+
+# reverse the log scaling because for some reason that's not done automatically
+exp(predict(step_model, crime_test_scaled))
+```
+
+This result is in the lower end of the training data. Because this is a
+linear model, it has high explainibility. I copied the coefficients and
+the scaled crime_stats data and multiplied each term out.
+
+| Variable | Estimate | Scaled Value | Impact |
+|----------|----------|--------------|--------|
+| NW       | 0.70     | -0.88        | -0.61  |
+| NW2      | -0.58    | -0.54        | 0.32   |
+| Po1      | 0.21     | 1.18         | 0.25   |
+| Wealth   | 0.11     | -2.13        | -0.24  |
+| Pop      | -0.07    | 2.98         | -0.21  |
+| Ed       | 0.29     | -0.50        | -0.15  |
+| Ineq     | 0.33     | 0.18         | 0.06   |
+| InvProb  | 0.14     | -0.15        | -0.02  |
+| U2       | 0.07     | 0.24         | 0.02   |
+| M        | 0.10     | 0.11         | 0.01   |
+| So       | -0.15    | 0.00         | 0.00   |
+
+Interestingly it turns out that $\text{NW}$ and $\text{NW}^2$ partially
+end up cancelling each other out; however combined they are still the
+most important factor with increasing non-white fraction correlated with
+decreasing the crime_stats per hundred thousand. Other important factors
+are: police per capita correlated with to an increase in crime_stats,
+and wealth, population, and education all correlated with a decrease in
+crime_stats. The fact that non-white population is the strongest
+predictor points to systematic issues in my opinion, possibly crime
+stats reporting being lower in the non-white community? The police per
+capita being high seems like an auto-correlation effect, if crime_stats
+was previously high there will be more police and current crime stats
+will be higher. The impact of wealth, education, and population all
+conform to my priors.
