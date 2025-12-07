@@ -74,7 +74,7 @@ not going to be creating a final test set.
 From Homework 5, my best model on all the training data had an adjusted
 $R^2$ of 0.8514 and in 10-fold cross validation had $R^2$ of 0.7953447,
 so those are the baselines I will be evaluating against. I am going to
-add the same features as I used previously
+add the same features as I used previously.
 
 ```{r}
 crime_stats <- df
@@ -150,8 +150,7 @@ Interestingly all the terms are significant (unlike my model from
 Homework 5), and the adjusted $R^2$ is a bit higher! Looking at the
 magnitudes of the coefficients PC1, PC3, and PC8 I would have expected
 them to be relatively unimportant; however, removing them caused a large
-degredation in quality of fit. This is something that I am going to ask
-about in office hours.
+degredation in quality of fit.
 
 \newpage
 
@@ -253,9 +252,11 @@ eq <- gsub("\\+ -", "- ", eq)
 
 cat(strwrap(eq, width = 80), sep = "\n")
 ```
+
 ```{r results='asis'}
 
 ```
+
 \newpage
 
 ## Comparison and conclusions
@@ -291,3 +292,16 @@ version.
 | Prob     | -1.082E+00 | \-         | \-      |
 | Time     | -5.965E-03 | \-         | \-      |
 | LF2      | -4.069E+01 | \-         | \-      |
+
+```{r}
+library(Metrics)
+
+crime_preds <- exp(predict(step_model, Xp))
+
+data.frame(obs = crime_stats$Crime, pred = crime_preds) %>%
+  summarise(
+    Rsquared = R2(pred, obs),
+    RMSE = RMSE(pred, obs),
+    MAE = MAE(pred, obs)
+  )
+```

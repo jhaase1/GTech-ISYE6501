@@ -1,0 +1,397 @@
+---
+title: "Homework 8"
+output: pdf_document
+date: "2025-10-16"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# [Question 11.1]{.underline}
+
+> Using the crime data set uscrime.txt from Questions 8.2, 9.1, and
+> 10.1, build a regression model using:
+>
+> A.  Stepwise regression
+> B.  Lasso
+> C.  Elastic net
+>
+> For Parts 2 and 3, remember to scale the data first – otherwise, the
+> regression coefficients will be on different scales and the constraint
+> won’t have the desired effect. For Parts 2 and 3, use the glmnet
+> function in R.
+>
+> Notes on R:
+>
+> -   For the elastic net model, what we called $\lambda$ in the videos,
+>     glmnet calls `alpha`; you can get a range of results by varying
+>     alpha from 1 (lasso) to 0 (ridge regression) [and, of course,
+>     other values of alpha in between].
+> -   In a function call like `glmnet(x,y,family=”mgaussian”,alpha=1)`
+>     the predictors x need to be in R’s matrix format, rather than data
+>     frame format. You can convert a data frame to a matrix using
+>     as.matrix – for example, `x <- as.matrix(data[,1:n-1])` Rather
+>     than specifying a value of T, glmnet returns models for a variety
+>     of values of T.
+
+## Boilerplate
+
+First we load the necessary libraries:
+
+```{r, message=FALSE}
+library(printr)     # pretty print for Rmd
+library(lubridate)  # dates
+library(ggplot2)    # plots
+library(dplyr)      # dataframes
+library(tidyr)
+library(tidyverse)
+library(recipes)
+library(caret)
+library(tree)
+library(randomForest)
+library(stats)
+library(MASS)      # step models
+library(glmnet)
+library(Metrics)
+
+# set seed for reproducibility
+set.seed(42)
+```
+
+\newpage
+
+Then let's load the data and add the same features I have used in all
+these models. Since we need to scale the data I am going to do that here
+as well.
+
+```{r}
+df <- read.table("./data 10.1/uscrime.txt", header =TRUE)
+
+crime_stats <- df %>% mutate(
+  InvProb = 1 / Prob,
+  LF2 = LF^2,
+  NW2 = NW^2
+)
+
+predictor_cols <- setdiff(names(crime_stats), "Crime")
+
+scaler <- preProcess(crime_stats[, predictor_cols],method = c("center", "scale"))
+crime_scaled <- cbind(
+  predict(scaler, crime_stats[, predictor_cols]),
+  Crime = crime_stats$Crime
+)
+
+crime_x <- as.matrix(crime_scaled[,predictor_cols])
+crime_y <- as.matrix(crime_scaled[,c("Crime")])
+```
+
+Note: As we know, our data set is extremely limited, therefore I will do
+10-fold cross validation on the final model, but am not going to be
+creating a final test set. It was recommended in office hours to use a
+consistent cross validation folds.
+
+```{r}
+folds <- 10
+datapoints <- nrow(crime_x)
+folds_for_glmnet <- sample(rep(1:folds, length.out = datapoints))
+```
+
+`caret` of course cannot use the same format for cross-validation.
+
+```{r}
+folds_for_caret <- lapply(1:folds, function(i) which(folds_for_glmnet != i))
+
+train_control <- trainControl(
+  method = "cv",
+  number = folds,
+  index = folds_for_caret,
+  savePredictions = "final"
+)
+```
+
+I'm also going to compare our standard point just out of curiosity.
+
+```{r}
+crime_test <- data.frame(
+  M    = 14.0, So   = 0    , Ed   = 10.0, Po1    = 12.0,
+  Po2  = 15.5, LF   = 0.640, M.F  = 94.0, Pop    = 150,
+  NW   = 1.1 , U1   = 0.120, U2   = 3.6 , Wealth = 3200,
+  Ineq = 20.1, Prob = 0.04 , Time = 39.0
+) %>% mutate(
+  InvProb = 1 / Prob,
+  LF2 = LF^2,
+  NW2 = NW^2
+)
+
+crime_test_scaled <- predict(scaler, crime_test)
+```
+
+\newpage
+
+## 11.1.A - Stepwise regression
+
+I actually used stepwise regression on 8.2 (linear regression) as
+(essentially) a GLM with an log linking function (`log(Crime) ~ .`).
+However, I could not figure out how to achieve this in Parts B and C.
+Therefore I will be fitting against an untransformed crime rate for
+better comparison. I have included the GLM stepwise regression in
+[Appendix 11.1.A - GLM Stepwise].
+
+```{r}
+constant_model <- lm(
+  Crime ~ 1,
+  data = crime_scaled
+)
+
+full_model <- glm(
+  Crime ~ .,
+  data = crime_scaled
+)
+
+# pages of output
+invisible(
+  capture.output(
+    step_model <- stepAIC(
+      constant_model,
+      scope = list(lower = constant_model, upper = full_model),
+      direction = "both"
+    )
+  )
+)
+
+summary(step_model)
+```
+
+So we have 7 factors that are significant. Let's look at the
+cross-validated metrics.
+
+```{r}
+cross_val_steps <- train(
+  formula(step_model),
+  data = crime_scaled,
+  method = "lm",
+  trControl = train_control
+)
+
+cross_val_steps
+```
+
+Now, let's predict our standard point.
+
+```{r}
+predict(
+  step_model,
+  crime_test_scaled
+)
+```
+
+Let's go on to Lasso.
+
+\newpage
+
+## 11.1.B - Lasso
+
+For Lasso and Elastic net we were told to use glmnet. Prof. Sobel said
+in lectures that this is a better global optimization strategy; however,
+I am finding the function more cumbersome to use. Let's choose our
+parameters.
+
+```{r}
+lasso <- cv.glmnet(
+  crime_x,
+  crime_y,
+  alpha=1,
+  nlambda=20,
+  foldid = folds_for_glmnet
+)
+
+plot(lasso)
+```
+
+As we can see in the plot there are two choices of $\lambda$ that the
+function highlights as possible "best": the minimum and the 1 standard
+error which allows a slightly worse model on the training set that is
+more parsimonious in the hopes that it will generalize better. However,
+given our splits the 1 standard error model is actually higher error and
+more terms; we will not be choosing that. So let's extract the best
+model.
+
+\newpage
+
+```{r}
+co <- coef(lasso, s = "lambda.min")
+vars_nonzero <- rownames(co)[as.vector(co != 0)]
+vars_nonzero <- vars_nonzero[vars_nonzero != "(Intercept)"]
+
+co
+```
+
+Now I'm going to run the train control to get consistent metrics.
+
+```{r}
+
+train(
+  as.formula(paste("Crime ~ ", paste(vars_nonzero, collapse = " + "))),
+  data = crime_scaled,
+  method = "lm",
+  trControl = train_control
+)
+```
+
+\newpage
+
+And let's predict our test point
+
+```{r}
+predict(lasso, crime_test_scaled, s = "lambda.min")
+```
+
+\newpage
+
+## 11.1.C - Elastic Net
+
+Now, let's explore a range of $\alpha$ in Elastic Net. We are excluding
+$\alpha=1$ because that was [11.1.B - Lasso]. As we go let's record
+metrics for $\lambda_{min}$ and $\lambda_{1se}$.
+
+```{r}
+elastic <- list()
+elastic_metrics <- list()
+
+for ( i in seq(10) )
+{
+  alpha <- (i-1)/10
+  
+  elastic_iter <- cv.glmnet(
+    crime_x,
+    crime_y,
+    alpha=alpha,
+    nlambda=20,
+    foldid = folds_for_glmnet
+  )
+  
+  elastic[[i]] <- elastic_iter
+  
+  i_min <- which(elastic_iter$lambda == elastic_iter$lambda.min)
+  i_1se <- which(elastic_iter$lambda == elastic_iter$lambda.1se)
+  
+  elastic_metrics[[i]] <- list(
+    alpha = alpha,
+    mse_min = elastic_iter$cvm[i_min],
+    mse_1se = elastic_iter$cvm[i_1se],
+    nzero_min = elastic_iter$nzero[i_min],
+    nzero_1se = elastic_iter$nzero[i_1se],
+    lambda_min = elastic_iter$lambda.min,
+    lambda_1se = elastic_iter$lambda.1se
+  )
+}
+
+elastic_metrics <- do.call(rbind, lapply(elastic_metrics, as.data.frame))
+
+as_tibble(elastic_metrics)
+```
+
+\newpage
+
+Just to choose something significantly different from the Lasso model, I
+am going to choose $\lambda_{1se}$ $\alpha=0.5$ (although I feel that
+the optimal choice would be $\lambda_{min}$ $\alpha=0.9$). Let's extract
+the model and get our cross validated metrics.
+
+```{r}
+co <- coef(elastic[[6]], s = "lambda.1se")
+vars_nonzero <- rownames(co)[as.vector(co != 0)]
+vars_nonzero <- vars_nonzero[vars_nonzero != "(Intercept)"]
+
+co
+```
+
+This is much more parsimonious than our Lasso model! Now I'm going to
+run the train control to get consistent metrics.
+
+```{r}
+train(
+  as.formula(paste("Crime ~ ", paste(vars_nonzero, collapse = " + "))),
+  data = crime_scaled,
+  method = "lm",
+  trControl = train_control
+)
+```
+
+Now let's make our final prediction.
+
+```{r}
+predict(elastic[[6]], crime_test_scaled, s = "lambda.1se")
+```
+
+\newpage
+
+## Evaluation and comparison to previous homeworks
+
+Comparing all the results observed so far. The first thing that is
+readily apparent is that the model is inherently non-linear because our
+exponential, and random forest methods perform significantly better than
+the purely linear models. Additionally, the models do not appear to
+generalize significantly better.
+
+| Question |               Method               | $R^2$ |   MAE    | RMSE  | Prediction |
+|:----------:|:-------------:|:----------:|:----------:|:----------:|:----------:|
+|   8.2    |   GLM Step AIC Linear Regression   | 0.901 |  117.0   | 139.3 |   490.5    |
+|   9.1    | GLM Step AIC PCA Linear Regression | 0.900 |  86.46   | 121.2 |   614.4    |
+|  10.1.A  |          Regression Tree           | 0.707 |  153.6   | 207.0 |   724.6    |
+|  10.1.B  |           Random Forest            | 0.944 |  82.58   | 121.9 |   1186.4   |
+|  11.1.A  |     Step AIC Linear Regression     | 0.786 | 180.7897 | 218.5 |   880.1    |
+|  11.1.B  |               Lasso                | 0.754 | 195.8812 | 241.1 |   842.5    |
+|  11.1.C  |            Elastic Net             | 0.667 | 216.2902 | 264.0 |   1259.2   |
+
+## Appendix 11.1.A - GLM Stepwise
+
+As stated in [11.1.A - Stepwise regression]. I had already been using
+Stepwise regression in the previous homeworks and I was achieving much
+better results because I was using the logarithmic linking function. I
+wanted to demonstrate that.
+
+```{r}
+constant_model <- glm(
+  Crime ~ 1,
+  data = crime_scaled,
+  family = gaussian(link = "log")
+)
+
+full_model <- glm(
+  Crime ~ .,
+  data = crime_scaled,
+  family = gaussian(link = "log")
+)
+
+# pages of output
+invisible(
+  capture.output(
+    step_model <- stepAIC(
+      constant_model,
+      scope = list(lower = constant_model, upper = full_model),
+      direction = "both"
+    )
+  )
+)
+
+summary(step_model)
+```
+
+And here is the results
+
+```{r}
+cross_val_steps <- train(
+  formula(step_model),
+  data = crime_scaled,
+  method = "glm",
+  family = gaussian(link = "log"),
+  trControl = train_control
+)
+
+cross_val_steps
+```

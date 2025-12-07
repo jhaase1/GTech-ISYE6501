@@ -1,0 +1,153 @@
+---
+title: "Homework 10"
+output: pdf_document
+date: "2025-10-30"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# [Boilerplate]{.underline}
+
+Import packages
+
+```{r, message=FALSE}
+library(printr)     # pretty print for Rmd
+library(lubridate)  # dates
+library(ggplot2)    # plots
+library(dplyr)      # dataframes
+library(tidyr)
+library(tidyverse)
+```
+
+# [Question 14.1]{.underline}
+
+> The breast cancer data set breast-cancer-wisconsin.data.txt from
+> <https://archive.ics.uci.edu/dataset/15/breast+cancer+wisconsin+original>
+> (description available at the same URL) has missing values.
+>
+> 1.  Use the mean/mode imputation method to impute values for the
+>     missing data.
+> 2.  Use regression to impute values for the missing data.
+> 3.  Use regression with perturbation to impute values for the missing
+>     data.
+> 4.  (Optional) Compare the results and quality of classification
+>     models (e.g., SVM, KNN) build using
+>     1.  the data sets from questions 1,2,3;
+>
+>     2.  the data that remains after data points with missing values
+>         are removed; and
+>
+>     3.  the data set when a binary variable is introduced to indicate
+>         missing values.
+
+Let's get the data, and add the column names in. In the description, it
+was stated that "?" is the unknown.
+
+```{r}
+raw <- read.csv(
+  "data-14.1/breast-cancer-wisconsin.data.csv",
+  col.names=c(
+    "id", "thickness",
+    "size_uniformity", "shape_uniformity",
+    "adhesion", "epithelial_size",
+    "bare_nuclei", "bland_chromatin",
+    "normal_nucleoli", "mitoses",
+    "class"
+  ),
+  na.strings="?"
+)
+```
+
+\newpage
+
+Let's identify the rows that are NA because those are the ones we want
+to see. Note: all the NA are `bare_nuclei`, which makes this easier to
+track.
+
+```{r}
+nan_rows = apply(is.na(raw), MARGIN = 1, any)
+n_nan_rows <- nrow(raw[nan_rows,])
+raw[nan_rows,c("id","bare_nuclei")]
+```
+
+## 14.1.A - Mean imputation
+
+Since we know where our missing data is, doing a basic mean imputation
+is very easy.
+
+```{r}
+mean_bare_nuclei <- raw %>%
+  mutate(across(-id, as.double)) %>%
+  replace_na(as.list(sapply(raw, mean, na.rm=TRUE)))
+
+mean_bare_nuclei[nan_rows,c("id","bare_nuclei")]
+```
+
+## 14.1.B - Regression Imputation
+
+In order to perform regression imputation we fit a model on non-nan rows
+excluding the identification column because it is arbitrary.
+
+```{r}
+regression_imputation <- raw
+regression_model <- lm(bare_nuclei ~ . - id, raw[-nan_rows,])
+regression_imputation[nan_rows,"bare_nuclei"] <- predict(regression_model, raw[nan_rows,])
+
+regression_imputation[nan_rows,c("id","bare_nuclei")]
+```
+
+\newpage
+
+## 14.1.C - Regression Imputation with perturbation
+
+We will use the same regression model as the basis for the imputation,
+with the addition of a perturbation of the solution from a normal
+distribution using the standard error as the standard deviation.
+
+```{r}
+regression_stats <- summary(regression_model)
+
+perturbation_imputation <- raw
+perturbation_imputation[
+  nan_rows,"bare_nuclei"
+] <- predict(regression_model, raw[nan_rows,]) + rnorm(
+  n_nan_rows,
+  0,
+  sd = regression_stats$sigma
+)
+
+perturbation_imputation[nan_rows,c("id","bare_nuclei")]
+```
+
+\newpage
+
+# [Question 15.1]{.underline}
+
+> Describe a situation or problem from your job, everyday life, current
+> events, etc., for which optimization would be appropriate. What data
+> would you need?
+
+A good example of optimization in everyday life is running errands. This
+is a generalization of the Traveling Salesman problem[^1] although
+obviously everyday people use heuristics for their solution rather than
+using a formal solution. The problem stated formally is: what route
+minimizes total time or distance, subject to real-world constraints such
+as avoiding left turns, ordering stops, or respecting business hours.
+Data that would need to be collected are:
+
+[^1]: <https://en.wikipedia.org/wiki/Travelling_salesman_problem>
+
+-   The distance or time required to travel a road section at a specific
+    time
+-   A preference against left hand turns[^2]
+-   Preference constraints on road sections (for example there is a
+    stretch of dirt road near me that I do not like to travel on)
+-   Any order constraints (e.g. opening/closing times, the stop to pick
+    up a gift needs to occur before the stop to mail it, ...)
+
+[^2]: <https://www.cnn.com/2017/02/16/world/ups-trucks-no-left-turns>

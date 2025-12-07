@@ -294,3 +294,16 @@ capita being high seems like an auto-correlation effect, if crime_stats
 was previously high there will be more police and current crime stats
 will be higher. The impact of wealth, education, and population all
 conform to my priors.
+
+```{r}
+library(Metrics)
+
+crime_preds <- exp(predict(step_model, crime_scaled))
+
+data.frame(obs = crime_stats$Crime, pred = crime_preds) %>%
+  summarise(
+    Rsquared = R2(pred, obs),
+    RMSE = RMSE(pred, obs),
+    MAE = MAE(pred, obs)
+  )
+```
